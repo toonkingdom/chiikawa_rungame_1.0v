@@ -1,1 +1,0 @@
-# chiikawa_rungame_1.0v
