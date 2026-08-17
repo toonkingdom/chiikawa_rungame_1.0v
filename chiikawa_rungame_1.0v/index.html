@@ -231,10 +231,9 @@ function formatTime(totalSeconds) {
 }
 
 function preload() {
-    // ⭕ assets/ 폴더 경로 지정
-   this.load.image('player_run1', './assets/run1.png');
-    this.load.image('obstacle1', './assets/obstacle1.png'); 
-    this.load.image('obstacle2', './assets/obstacle2.png');
+    this.load.image('player_run1', 'assets/run1.png');
+    this.load.image('obstacle1', 'assets/obstacle1.png'); 
+    this.load.image('obstacle2', 'assets/obstacle2.png');
     
     let g = this.make.graphics({ x: 0, y: 0, add: false });
     g.fillStyle(0x38bdf8); g.fillRect(0, 0, 40, 50); g.generateTexture('playerDummy', 40, 50); g.clear();
