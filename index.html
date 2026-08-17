@@ -7,7 +7,14 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;700;900&display=swap" rel="stylesheet">
+    
+    <!-- Phaser 3 Engine -->
     <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.min.js"></script>
+    
+    <!-- Firebase SDK (v9 Compatibility Build) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+
     <style>
         * { font-family: 'Noto Sans KR', sans-serif; box-sizing: border-box; }
         body { margin: 0; padding: 0; background-color: #0f172a; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; overflow: hidden; color: #fff; }
@@ -157,6 +164,20 @@
 </div>
 
 <script>
+// ==========================================
+// 1. Firebase Realtime Database 간단 초기화
+// ==========================================
+const firebaseConfig = {
+    databaseURL: "https://chiikawa-run-default-rtdb.firebaseio.com/" // 👈 본인의 DB URL로 교체하세요
+};
+
+firebase.initializeApp(firebaseConfig);
+const database = firebase.database();
+const rankRef = database.ref('rankings');
+
+// ==========================================
+// 2. Phaser 게임 설정
+// ==========================================
 const config = {
     type: Phaser.AUTO,
     width: 800,
@@ -164,7 +185,7 @@ const config = {
     parent: 'game-container',
     physics: {
         default: 'arcade',
-        arcade: { gravity: { y: 2200 }, debug: true }
+        arcade: { gravity: { y: 2200 }, debug: false }
     },
     scene: { preload: preload, create: create, update: update }
 };
@@ -198,6 +219,8 @@ let speedLineGraphics, exhaustedOverlay;
 let isPitStunned = false;
 let afterimageTimer = 0;
 
+let currentLeaderboardCache = [];
+
 function formatTime(totalSeconds) {
     let ts = Math.max(0, totalSeconds);
     let minutes = Math.floor(ts / 60);
@@ -208,9 +231,9 @@ function formatTime(totalSeconds) {
 }
 
 function preload() {
-    this.load.image('player_run1', 'assets/run1.png');
-    this.load.image('obstacle1', 'assets/obstacle1.png'); 
-    this.load.image('obstacle2', 'assets/obstacle2.png');
+    this.load.image('player_run1', 'run1.png');
+    this.load.image('obstacle1', 'obstacle1.png'); 
+    this.load.image('obstacle2', 'obstacle2.png');
 
     let g = this.make.graphics({ x: 0, y: 0, add: false });
     g.fillStyle(0x38bdf8); g.fillRect(0, 0, 40, 50); g.generateTexture('playerDummy', 40, 50); g.clear();
@@ -362,7 +385,7 @@ function create() {
     headStatusText = this.add.text(0, 0, '', { fontFamily: 'Noto Sans KR', fontSize: '13px', fontWeight: 'bold', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5).setVisible(false);
     exhaustedOverlay = this.add.rectangle(400, 225, 800, 450, 0xef4444, 0).setScrollFactor(0).setDepth(100);
 
-    updateInGameLeaderboardUI();
+    listenToRealtimeLeaderboard();
 }
 
 function createTarzanObstacle(pivotX, pivotY) {
@@ -577,31 +600,45 @@ function createJumpEffect(x, y) {
     this.tweens.add({ targets: c, radius: 35, alpha: 0, duration: 300, onComplete: () => c.destroy() });
 }
 
-function getLeaderboard() {
-    return JSON.parse(localStorage.getItem('running_game_time_rankings') || '[]');
+// ==========================================
+// 3. Firebase 실시간 랭킹 처리 로직
+// ==========================================
+function listenToRealtimeLeaderboard() {
+    rankRef.orderByChild('time').limitToFirst(50).on('value', (snapshot) => {
+        let board = [];
+        snapshot.forEach((childSnapshot) => {
+            board.push({ id: childSnapshot.key, ...childSnapshot.val() });
+        });
+        
+        currentLeaderboardCache = board;
+        updateInGameLeaderboardUI();
+        renderRankingList(lastSavedRecordId);
+    });
 }
 
 function saveTimeRecord(name, timeVal, comment) {
-    let board = getLeaderboard();
+    let newRankRef = rankRef.push();
     let newRecord = {
-        id: Date.now(),
         name: name || '익명',
         time: parseFloat(timeVal),
-        comment: comment || '화이팅!'
+        comment: comment || '화이팅!',
+        createdAt: firebase.database.ServerValue.TIMESTAMP
     };
-    board.push(newRecord);
-    board.sort((a, b) => a.time - b.time);
-    localStorage.setItem('running_game_time_rankings', JSON.stringify(board));
-    return newRecord.id;
+
+    newRankRef.set(newRecord, (error) => {
+        if (!error) {
+            lastSavedRecordId = newRankRef.key;
+        }
+    });
 }
 
 function updateInGameLeaderboardUI() {
-    let board = getLeaderboard();
     let listEl = document.getElementById('in-game-leaderboard-list');
     if (!listEl) return;
 
     listEl.innerHTML = '';
-    
+    let board = currentLeaderboardCache;
+
     if (board.length === 0) {
         listEl.innerHTML = '<li class="empty-msg">등록된 기록이 없습니다.</li>';
         return;
@@ -643,9 +680,14 @@ function updateInGameLeaderboardUI() {
 }
 
 function renderRankingList(myRecordId) {
-    let board = getLeaderboard(), listContainer = document.getElementById('ranking-list');
+    let board = currentLeaderboardCache, listContainer = document.getElementById('ranking-list');
+    if (!listContainer) return;
     listContainer.innerHTML = '';
-    if (board.length === 0) { listContainer.innerHTML = '<div style="text-align:center; color:#64748b; padding:10px;">등록된 랭킹 기록이 없습니다.</div>'; return; }
+    
+    if (board.length === 0) { 
+        listContainer.innerHTML = '<div style="text-align:center; color:#64748b; padding:10px;">등록된 랭킹 기록이 없습니다.</div>'; 
+        return; 
+    }
 
     board.slice(0, 10).forEach((item, index) => {
         let div = document.createElement('div');
@@ -700,21 +742,12 @@ document.getElementById('save-rank-btn').addEventListener('click', () => {
     let nameInput = document.getElementById('player-name').value.trim() || '익명';
     let commentInput = document.getElementById('player-comment').value.trim() || '화이팅!';
     
-    lastSavedRecordId = saveTimeRecord(nameInput, finalRecordTime, commentInput);
-    
-    renderRankingList(lastSavedRecordId);
-    updateInGameLeaderboardUI();
-    
+    saveTimeRecord(nameInput, finalRecordTime, commentInput);
     document.getElementById('name-input-section').style.display = 'none';
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-    updateInGameLeaderboardUI();
 });
 
 window.onload = () => { 
     game = new Phaser.Game(config);
-    updateInGameLeaderboardUI();
 };
 </script>
 </body>
